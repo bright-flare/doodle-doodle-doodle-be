@@ -7,6 +7,8 @@ import com.gaetteok.backend.api.dto.JoinRequestCreateRequest
 import com.gaetteok.backend.api.dto.JoinRequestDto
 import com.gaetteok.backend.api.dto.PendingPlayerDto
 import com.gaetteok.backend.api.dto.PlayerDto
+import com.gaetteok.backend.api.dto.ReactionDto
+import com.gaetteok.backend.api.dto.ReactionRequest
 import com.gaetteok.backend.api.dto.RoomCommandRequest
 import com.gaetteok.backend.api.dto.RoomConfigDto
 import com.gaetteok.backend.api.dto.RoomMessageDto
@@ -20,6 +22,7 @@ import com.gaetteok.backend.api.dto.VoteRequest
 import com.gaetteok.backend.domain.game.model.JoinRequest
 import com.gaetteok.backend.domain.game.model.PendingPlayer
 import com.gaetteok.backend.domain.game.model.PlayerState
+import com.gaetteok.backend.domain.game.model.RoomReaction
 import com.gaetteok.backend.domain.game.model.RoomConfig
 import com.gaetteok.backend.domain.game.model.RoomMessage
 import com.gaetteok.backend.domain.game.model.RoomState
@@ -46,11 +49,13 @@ class GameApplicationService(
     private val roomRepository: GameRoomRepository,
 ) : GameFacade {
     private val keywords = listOf("사자", "바나나", "우주선", "떡볶이", "기린", "컴퓨터", "해바라기", "피자", "고양이", "자전거")
+    private val roomCodeAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789".toCharArray()
 
     companion object {
         private const val ROUND_START_DELAY_MS = 2200L
         private const val ROUND_END_DELAY_MS = 2600L
         private const val MAX_MESSAGES = 120
+        private const val MAX_REACTIONS = 32
         private const val MAX_PROCESSED_COMMANDS = 300
     }
 
@@ -198,8 +203,13 @@ class GameApplicationService(
         val currentTime = now()
         room.roundNo = 1
         room.turnIndex = 0
+        room.config.roundTimeSec = request.roundTimeSec?.coerceIn(20, 180) ?: room.config.roundTimeSec
+        room.config.totalRounds = request.totalRounds?.coerceIn(1, 5) ?: room.config.totalRounds
         room.winnerSessionId = null
         room.roundResult = null
+        room.keywordPool.clear()
+        room.lastKeyword = null
+        room.reactions.clear()
         room.players.forEach {
             it.score = 0
             it.lastSeenAt = currentTime
@@ -235,7 +245,7 @@ class GameApplicationService(
                 text = clean,
                 ts = now(),
                 system = false,
-                kind = if (isReaction(clean)) "reaction" else "chat",
+                kind = "chat",
             )
         )
 
@@ -266,6 +276,31 @@ class GameApplicationService(
                 )
             }
         }
+
+        registerCommand(room, request.commandId)
+        bumpVersion(room)
+        roomRepository.save(room)
+        return sanitizeRoom(room, request.sessionId)
+    }
+
+    @Synchronized
+    override fun sendReaction(code: String, request: ReactionRequest): RoomSnapshotDto {
+        val room = roomRepository.findByCode(code.uppercase()) ?: badRequest("invalid room")
+        val session = sessionRepository.findById(request.sessionId) ?: badRequest("invalid room/session")
+        if (hasProcessedCommand(room, request.commandId)) return sanitizeRoom(room, request.sessionId)
+        val emoji = request.emoji.trim()
+        if (!isReaction(emoji)) badRequest("지원하지 않는 리액션이에요")
+
+        appendReaction(
+            room,
+            RoomReaction(
+                reactionId = shortId(),
+                sessionId = request.sessionId,
+                nickname = nicknameFor(room, request.sessionId, session.nickname),
+                emoji = emoji,
+                ts = now(),
+            )
+        )
 
         registerCommand(room, request.commandId)
         bumpVersion(room)
@@ -378,7 +413,11 @@ class GameApplicationService(
 
     private fun shortId(): String = UUID.randomUUID().toString().replace("-", "").take(8)
 
-    private fun roomCode(): String = UUID.randomUUID().toString().replace("-", "").take(4).uppercase()
+    private fun roomCode(): String = buildString {
+        repeat(6) {
+            append(roomCodeAlphabet[Random.nextInt(roomCodeAlphabet.size)])
+        }
+    }
 
     private fun uniqueRoomCode(): String {
         repeat(32) {
@@ -446,6 +485,13 @@ class GameApplicationService(
         room.messages.add(message)
         if (room.messages.size > MAX_MESSAGES) {
             room.messages = room.messages.takeLast(MAX_MESSAGES).toMutableList()
+        }
+    }
+
+    private fun appendReaction(room: RoomState, reaction: RoomReaction) {
+        room.reactions.add(reaction)
+        if (room.reactions.size > MAX_REACTIONS) {
+            room.reactions = room.reactions.takeLast(MAX_REACTIONS).toMutableList()
         }
     }
 
@@ -524,14 +570,37 @@ class GameApplicationService(
         return changed
     }
 
+    private fun nextKeyword(room: RoomState): String {
+        if (room.keywordPool.isEmpty()) {
+            room.keywordPool = keywords.shuffled().toMutableList()
+        }
+
+        if (room.keywordPool.size > 1 && room.lastKeyword != null && room.keywordPool.first() == room.lastKeyword) {
+            val swapIndex = room.keywordPool.indexOfFirst { keyword -> keyword != room.lastKeyword }
+            if (swapIndex > 0) {
+                val currentFirst = room.keywordPool.first()
+                room.keywordPool[0] = room.keywordPool[swapIndex]
+                room.keywordPool[swapIndex] = currentFirst
+            }
+        }
+
+        val keyword = room.keywordPool.firstOrNull() ?: keywords.random()
+        if (room.keywordPool.isNotEmpty()) {
+            room.keywordPool.removeAt(0)
+        }
+        room.lastKeyword = keyword
+        return keyword
+    }
+
     private fun startRoundCountdown(room: RoomState) {
         val drawer = room.players.getOrNull(room.turnIndex)
         room.drawerSessionId = drawer?.sessionId
         room.turnId = shortId()
-        room.keyword = keywords.random()
+        room.keyword = nextKeyword(room)
         room.maskedKeyword = room.keyword?.let { maskWord(it) } ?: ""
         room.hintRevealed = false
         room.strokes.clear()
+        room.reactions.clear()
         room.roundResult = null
         room.turnStartedAt = null
         room.turnEndsAt = null
@@ -664,6 +733,15 @@ class GameApplicationService(
                     ts = it.ts,
                     system = it.system,
                     kind = it.kind,
+                )
+            },
+            reactions = room.reactions.map {
+                ReactionDto(
+                    reactionId = it.reactionId,
+                    sessionId = it.sessionId,
+                    nickname = it.nickname,
+                    emoji = it.emoji,
+                    ts = it.ts,
                 )
             },
             joinRequests = room.joinRequests.map {

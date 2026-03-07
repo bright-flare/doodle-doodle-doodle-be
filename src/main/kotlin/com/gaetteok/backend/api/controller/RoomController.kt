@@ -3,6 +3,7 @@ package com.gaetteok.backend.api.controller
 import com.gaetteok.backend.api.dto.ChatRequest
 import com.gaetteok.backend.api.dto.CreateRoomRequest
 import com.gaetteok.backend.api.dto.JoinRequestCreateRequest
+import com.gaetteok.backend.api.dto.ReactionRequest
 import com.gaetteok.backend.api.dto.RoomCommandRequest
 import com.gaetteok.backend.api.dto.RoomResponse
 import com.gaetteok.backend.api.dto.StrokeRequest
@@ -60,6 +61,16 @@ class RoomController(
         @Valid @RequestBody request: ChatRequest,
     ): ResponseEntity<RoomResponse> {
         val room = gameFacade.sendChat(code, request)
+        realtimeGateway.publishRoomSnapshot(room.code)
+        return ResponseEntity.ok(RoomResponse(room))
+    }
+
+    @PostMapping("/{code}/reaction")
+    fun sendReaction(
+        @PathVariable code: String,
+        @Valid @RequestBody request: ReactionRequest,
+    ): ResponseEntity<RoomResponse> {
+        val room = gameFacade.sendReaction(code, request)
         realtimeGateway.publishRoomSnapshot(room.code)
         return ResponseEntity.ok(RoomResponse(room))
     }

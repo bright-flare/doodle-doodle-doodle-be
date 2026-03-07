@@ -29,6 +29,12 @@ data class RoomCommandRequest(
     @field:NotBlank
     val sessionId: String,
     val commandId: String? = null,
+    @field:Min(20)
+    @field:Max(180)
+    val roundTimeSec: Int? = null,
+    @field:Min(1)
+    @field:Max(5)
+    val totalRounds: Int? = null,
 )
 
 data class ChatRequest(
@@ -36,6 +42,14 @@ data class ChatRequest(
     val sessionId: String,
     @field:NotBlank
     val text: String,
+    val commandId: String? = null,
+)
+
+data class ReactionRequest(
+    @field:NotBlank
+    val sessionId: String,
+    @field:NotBlank
+    val emoji: String,
     val commandId: String? = null,
 )
 
@@ -106,6 +120,7 @@ data class RoomSnapshotDto(
     val phaseEndsAt: Long?,
     val strokes: List<StrokeDto>,
     val messages: List<RoomMessageDto>,
+    val reactions: List<ReactionDto>,
     val joinRequests: List<JoinRequestDto>,
     val roundResult: RoundResultDto?,
     val winnerSessionId: String?,
@@ -137,6 +152,14 @@ data class RoomMessageDto(
     val ts: Long,
     val system: Boolean = false,
     val kind: String? = null,
+)
+
+data class ReactionDto(
+    val reactionId: String,
+    val sessionId: String,
+    val nickname: String,
+    val emoji: String,
+    val ts: Long,
 )
 
 data class JoinRequestDto(

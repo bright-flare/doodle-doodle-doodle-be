@@ -4,6 +4,7 @@ import com.gaetteok.backend.api.dto.ChatRequest
 import com.gaetteok.backend.api.dto.CreateRoomRequest
 import com.gaetteok.backend.api.dto.CreateSessionRequest
 import com.gaetteok.backend.api.dto.JoinRequestCreateRequest
+import com.gaetteok.backend.api.dto.ReactionRequest
 import com.gaetteok.backend.api.dto.RoomCommandRequest
 import com.gaetteok.backend.api.dto.RoomSnapshotDto
 import com.gaetteok.backend.api.dto.SessionDto
@@ -19,6 +20,7 @@ interface GameFacade {
     fun setPresence(code: String, sessionId: String, connected: Boolean): RoomSnapshotDto
     fun startGame(code: String, request: RoomCommandRequest): RoomSnapshotDto
     fun sendChat(code: String, request: ChatRequest): RoomSnapshotDto
+    fun sendReaction(code: String, request: ReactionRequest): RoomSnapshotDto
     fun sendStroke(code: String, request: StrokeRequest): RoomSnapshotDto
     fun createJoinRequest(code: String, request: JoinRequestCreateRequest): RoomSnapshotDto
     fun voteJoinRequest(code: String, request: VoteRequest): RoomSnapshotDto

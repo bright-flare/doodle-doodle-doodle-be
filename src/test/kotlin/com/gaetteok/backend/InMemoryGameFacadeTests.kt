@@ -21,6 +21,7 @@ class InMemoryGameFacadeTests {
         val room = facade.createRoom(CreateRoomRequest(action = "create", sessionId = host.id))
         val joined = facade.joinRoom(CreateRoomRequest(action = "join", sessionId = guest.id, code = room.code, asSpectator = false))
 
+        assertEquals(6, room.code.length)
         assertEquals(2, joined.players.size)
         assertTrue(joined.players.any { it.sessionId == host.id })
         assertTrue(joined.players.any { it.sessionId == guest.id })
@@ -38,6 +39,27 @@ class InMemoryGameFacadeTests {
 
         assertTrue(started.status == "ROUND_START" || started.status == "DRAWING")
         assertNotNull(started.drawerSessionId)
+    }
+
+    @Test
+    fun `host can restart with new round config`() {
+        val facade = InMemoryGameFacade()
+        val host = facade.createSession(CreateSessionRequest("호스트"))
+        val guest = facade.createSession(CreateSessionRequest("게스트"))
+
+        val room = facade.createRoom(CreateRoomRequest(action = "create", sessionId = host.id))
+        facade.joinRoom(CreateRoomRequest(action = "join", sessionId = guest.id, code = room.code, asSpectator = false))
+        val started = facade.startGame(
+            room.code,
+            RoomCommandRequest(
+                sessionId = host.id,
+                roundTimeSec = 90,
+                totalRounds = 5,
+            )
+        )
+
+        assertEquals(90, started.config.roundTimeSec)
+        assertEquals(5, started.config.totalRounds)
     }
 
     @Test

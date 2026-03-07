@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.gaetteok.backend.api.dto.ChatRequest
 import com.gaetteok.backend.api.dto.JoinRequestCreateRequest
+import com.gaetteok.backend.api.dto.ReactionRequest
 import com.gaetteok.backend.api.dto.RoomCommandRequest
 import com.gaetteok.backend.api.dto.StrokeDto
 import com.gaetteok.backend.api.dto.StrokeRequest
@@ -86,7 +87,15 @@ class RoomWebSocketHandler(
                 "game.start" -> {
                     val normalizedCode = requireRoomCode(roomCode)
                     val normalizedSessionId = requireSessionId(sessionId)
-                    gameFacade.startGame(normalizedCode, RoomCommandRequest(normalizedSessionId, message.commandId))
+                    gameFacade.startGame(
+                        normalizedCode,
+                        RoomCommandRequest(
+                            sessionId = normalizedSessionId,
+                            commandId = message.commandId,
+                            roundTimeSec = message.payload.optionalInt("roundTimeSec"),
+                            totalRounds = message.payload.optionalInt("totalRounds"),
+                        )
+                    )
                     message.commandId?.let { realtimeGateway.publishCommandOk(connectionId, it) }
                     realtimeGateway.publishRoomSnapshot(normalizedCode)
                 }
@@ -96,6 +105,15 @@ class RoomWebSocketHandler(
                     val normalizedSessionId = requireSessionId(sessionId)
                     val textPayload = message.payload?.path("text")?.asText()?.trim().orEmpty()
                     gameFacade.sendChat(normalizedCode, ChatRequest(normalizedSessionId, textPayload, message.commandId))
+                    message.commandId?.let { realtimeGateway.publishCommandOk(connectionId, it) }
+                    realtimeGateway.publishRoomSnapshot(normalizedCode)
+                }
+
+                "reaction.send" -> {
+                    val normalizedCode = requireRoomCode(roomCode)
+                    val normalizedSessionId = requireSessionId(sessionId)
+                    val emoji = message.payload?.path("emoji")?.asText()?.trim().orEmpty()
+                    gameFacade.sendReaction(normalizedCode, ReactionRequest(normalizedSessionId, emoji, message.commandId))
                     message.commandId?.let { realtimeGateway.publishCommandOk(connectionId, it) }
                     realtimeGateway.publishRoomSnapshot(normalizedCode)
                 }
@@ -166,5 +184,11 @@ class RoomWebSocketHandler(
             objectMapper.treeAsTokens(node),
             object : TypeReference<List<StrokeDto>>() {},
         )
+    }
+
+    private fun com.fasterxml.jackson.databind.JsonNode?.optionalInt(field: String): Int? {
+        val node = this?.path(field) ?: return null
+        if (node.isMissingNode || node.isNull) return null
+        return node.asInt()
     }
 }

@@ -56,6 +56,14 @@ data class RoomMessage(
     val kind: String? = null,
 )
 
+data class RoomReaction(
+    val reactionId: String,
+    val sessionId: String,
+    val nickname: String,
+    val emoji: String,
+    val ts: Long,
+)
+
 data class JoinRequest(
     var requestId: String,
     var sessionId: String,
@@ -109,4 +117,7 @@ data class RoomState(
     var roundResult: RoundResult?,
     var winnerSessionId: String?,
     var processedCommandIds: MutableList<String>,
+    var keywordPool: MutableList<String> = mutableListOf(),
+    var lastKeyword: String? = null,
+    var reactions: MutableList<RoomReaction> = mutableListOf(),
 )

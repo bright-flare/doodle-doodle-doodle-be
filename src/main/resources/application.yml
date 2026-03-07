@@ -1,10 +1,22 @@
 spring:
   application:
     name: gaetteok-backend
+  profiles:
+    default: local
+  jpa:
+    open-in-view: false
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
 server:
-  port: 8080
+  port: ${PORT:8080}
 management:
   endpoints:
     web:
       exposure:
         include: health,info
+gaetteok:
+  realtime:
+    allowed-origins: ${GAETTEOK_ALLOWED_ORIGINS:*}
+    websocket-path: ${GAETTEOK_WEBSOCKET_PATH:/ws/rooms}

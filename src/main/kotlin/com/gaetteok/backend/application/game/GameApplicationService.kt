@@ -1,4 +1,4 @@
-package com.gaetteok.backend.game.service
+package com.gaetteok.backend.application.game
 
 import com.gaetteok.backend.api.dto.ChatRequest
 import com.gaetteok.backend.api.dto.CreateRoomRequest
@@ -17,26 +17,34 @@ import com.gaetteok.backend.api.dto.SessionDto
 import com.gaetteok.backend.api.dto.StrokeDto
 import com.gaetteok.backend.api.dto.StrokeRequest
 import com.gaetteok.backend.api.dto.VoteRequest
-import com.gaetteok.backend.game.model.JoinRequest
-import com.gaetteok.backend.game.model.PendingPlayer
-import com.gaetteok.backend.game.model.PlayerState
-import com.gaetteok.backend.game.model.RoomConfig
-import com.gaetteok.backend.game.model.RoomMessage
-import com.gaetteok.backend.game.model.RoomState
-import com.gaetteok.backend.game.model.RoomStatus
-import com.gaetteok.backend.game.model.RoundResult
-import com.gaetteok.backend.game.model.ScoreDelta
-import com.gaetteok.backend.game.model.Stroke
-import com.gaetteok.backend.game.model.UserSession
+import com.gaetteok.backend.domain.game.model.JoinRequest
+import com.gaetteok.backend.domain.game.model.PendingPlayer
+import com.gaetteok.backend.domain.game.model.PlayerState
+import com.gaetteok.backend.domain.game.model.RoomConfig
+import com.gaetteok.backend.domain.game.model.RoomMessage
+import com.gaetteok.backend.domain.game.model.RoomState
+import com.gaetteok.backend.domain.game.model.RoomStatus
+import com.gaetteok.backend.domain.game.model.RoundResult
+import com.gaetteok.backend.domain.game.model.ScoreDelta
+import com.gaetteok.backend.domain.game.model.Stroke
+import com.gaetteok.backend.domain.game.model.UserSession
+import com.gaetteok.backend.domain.game.repository.GameRoomRepository
+import com.gaetteok.backend.domain.game.repository.GameSessionRepository
+import com.gaetteok.backend.game.service.GameFacade
 import org.springframework.http.HttpStatus
+import org.springframework.stereotype.Service
+import org.springframework.transaction.annotation.Transactional
 import org.springframework.web.server.ResponseStatusException
 import java.util.UUID
 import kotlin.math.floor
 import kotlin.random.Random
 
-class InMemoryGameFacade : GameFacade {
-    private val sessions = LinkedHashMap<String, UserSession>()
-    private val rooms = LinkedHashMap<String, RoomState>()
+@Service
+@Transactional
+class GameApplicationService(
+    private val sessionRepository: GameSessionRepository,
+    private val roomRepository: GameRoomRepository,
+) : GameFacade {
     private val keywords = listOf("사자", "바나나", "우주선", "떡볶이", "기린", "컴퓨터", "해바라기", "피자", "고양이", "자전거")
 
     companion object {
@@ -54,23 +62,24 @@ class InMemoryGameFacade : GameFacade {
             createdAt = now(),
             lastSeenAt = now(),
         )
-        sessions[session.id] = session
+        sessionRepository.save(session)
         return session.toDto()
     }
 
     @Synchronized
     override fun getSession(sessionId: String): SessionDto? {
-        val session = sessions[sessionId] ?: return null
+        val session = sessionRepository.findById(sessionId) ?: return null
         session.lastSeenAt = now()
+        sessionRepository.save(session)
         return session.toDto()
     }
 
     @Synchronized
     override fun createRoom(request: CreateRoomRequest): RoomSnapshotDto {
-        val host = sessions[request.sessionId] ?: badRequest("invalid session")
+        val host = sessionRepository.findById(request.sessionId) ?: badRequest("invalid session")
         val createdAt = now()
         val room = RoomState(
-            code = roomCode(),
+            code = uniqueRoomCode(),
             hostSessionId = host.id,
             config = RoomConfig(
                 roundTimeSec = request.roundTimeSec?.coerceIn(20, 180) ?: 60,
@@ -110,25 +119,27 @@ class InMemoryGameFacade : GameFacade {
             winnerSessionId = null,
             processedCommandIds = mutableListOf(),
         )
-        rooms[room.code] = room
+        roomRepository.save(room)
         return sanitizeRoom(room, host.id)
     }
 
     @Synchronized
     override fun joinRoom(request: CreateRoomRequest): RoomSnapshotDto {
         val code = request.code?.uppercase() ?: badRequest("code required")
-        val room = rooms[code] ?: badRequest("invalid room/session")
-        val session = sessions[request.sessionId] ?: badRequest("invalid room/session")
+        val room = roomRepository.findByCode(code) ?: badRequest("invalid room/session")
+        val session = sessionRepository.findById(request.sessionId) ?: badRequest("invalid room/session")
         val currentTime = now()
 
         playerBySessionId(room, request.sessionId)?.let { player ->
             player.connected = true
             player.lastSeenAt = currentTime
+            roomRepository.save(room)
             return sanitizeRoom(room, request.sessionId)
         }
 
         if (room.spectators.contains(request.sessionId)) {
             room.spectatorLastSeenAt[request.sessionId] = currentTime
+            roomRepository.save(room)
             return sanitizeRoom(room, request.sessionId)
         }
 
@@ -153,29 +164,33 @@ class InMemoryGameFacade : GameFacade {
         }
 
         bumpVersion(room)
+        roomRepository.save(room)
         return sanitizeRoom(room, request.sessionId)
     }
 
     @Synchronized
     override fun getRoom(code: String, sessionId: String?): RoomSnapshotDto? {
-        val room = rooms[code.uppercase()] ?: return null
+        val room = roomRepository.findByCode(code.uppercase()) ?: return null
+        var shouldPersist = false
         if (sessionId != null) {
-            setPresence(room, sessionId, true)
+            setPresenceOnRead(room, sessionId, true)
+            shouldPersist = true
         }
-        return sanitizeRoom(room, sessionId)
+        return sanitizeRoom(room, sessionId, persist = shouldPersist)
     }
 
     @Synchronized
     override fun setPresence(code: String, sessionId: String, connected: Boolean): RoomSnapshotDto {
-        val room = rooms[code.uppercase()] ?: badRequest("invalid room")
-        setPresence(room, sessionId, connected)
+        val room = roomRepository.findByCode(code.uppercase()) ?: badRequest("invalid room")
+        setPresenceOnRead(room, sessionId, connected)
         bumpVersion(room)
+        roomRepository.save(room)
         return sanitizeRoom(room, sessionId)
     }
 
     @Synchronized
     override fun startGame(code: String, request: RoomCommandRequest): RoomSnapshotDto {
-        val room = rooms[code.uppercase()] ?: badRequest("invalid room")
+        val room = roomRepository.findByCode(code.uppercase()) ?: badRequest("invalid room")
         if (hasProcessedCommand(room, request.commandId)) return sanitizeRoom(room, request.sessionId)
         if (room.hostSessionId != request.sessionId) badRequest("only host can start")
         if (room.players.size < 2) badRequest("방장 포함 최소 2명의 플레이어가 필요해요")
@@ -197,13 +212,14 @@ class InMemoryGameFacade : GameFacade {
         startRoundCountdown(room)
         registerCommand(room, request.commandId)
         bumpVersion(room)
+        roomRepository.save(room)
         return sanitizeRoom(room, request.sessionId)
     }
 
     @Synchronized
     override fun sendChat(code: String, request: ChatRequest): RoomSnapshotDto {
-        val room = rooms[code.uppercase()] ?: badRequest("invalid room/session")
-        val session = sessions[request.sessionId] ?: badRequest("invalid room/session")
+        val room = roomRepository.findByCode(code.uppercase()) ?: badRequest("invalid room/session")
+        val session = sessionRepository.findById(request.sessionId) ?: badRequest("invalid room/session")
         if (hasProcessedCommand(room, request.commandId)) return sanitizeRoom(room, request.sessionId)
 
         tickRoom(room)
@@ -253,12 +269,13 @@ class InMemoryGameFacade : GameFacade {
 
         registerCommand(room, request.commandId)
         bumpVersion(room)
+        roomRepository.save(room)
         return sanitizeRoom(room, request.sessionId)
     }
 
     @Synchronized
     override fun sendStroke(code: String, request: StrokeRequest): RoomSnapshotDto {
-        val room = rooms[code.uppercase()] ?: badRequest("invalid room")
+        val room = roomRepository.findByCode(code.uppercase()) ?: badRequest("invalid room")
         if (hasProcessedCommand(room, request.commandId)) return sanitizeRoom(room, request.sessionId)
         tickRoom(room)
         if (room.status != RoomStatus.DRAWING) return sanitizeRoom(room, request.sessionId)
@@ -273,13 +290,14 @@ class InMemoryGameFacade : GameFacade {
         room.strokes.addAll(strokes)
         registerCommand(room, request.commandId)
         bumpVersion(room)
+        roomRepository.save(room)
         return sanitizeRoom(room, request.sessionId)
     }
 
     @Synchronized
     override fun createJoinRequest(code: String, request: JoinRequestCreateRequest): RoomSnapshotDto {
-        val room = rooms[code.uppercase()] ?: badRequest("invalid room/session")
-        val session = sessions[request.sessionId] ?: badRequest("invalid room/session")
+        val room = roomRepository.findByCode(code.uppercase()) ?: badRequest("invalid room/session")
+        val session = sessionRepository.findById(request.sessionId) ?: badRequest("invalid room/session")
         if (hasProcessedCommand(room, request.commandId)) return sanitizeRoom(room, request.sessionId)
         if (playerBySessionId(room, request.sessionId) != null) badRequest("이미 플레이어예요")
 
@@ -310,12 +328,13 @@ class InMemoryGameFacade : GameFacade {
         registerCommand(room, request.commandId)
         systemMessage(room, "${joinRequest.nickname} 님이 플레이어 입장을 요청했습니다.")
         bumpVersion(room)
+        roomRepository.save(room)
         return sanitizeRoom(room, request.sessionId)
     }
 
     @Synchronized
     override fun voteJoinRequest(code: String, request: VoteRequest): RoomSnapshotDto {
-        val room = rooms[code.uppercase()] ?: badRequest("invalid room")
+        val room = roomRepository.findByCode(code.uppercase()) ?: badRequest("invalid room")
         if (hasProcessedCommand(room, request.commandId)) return sanitizeRoom(room, request.sessionId)
         val voter = playerBySessionId(room, request.sessionId) ?: badRequest("only players can vote")
         val joinRequest = room.joinRequests.firstOrNull { it.requestId == request.requestId && !it.resolved } ?: badRequest("request not found")
@@ -351,6 +370,7 @@ class InMemoryGameFacade : GameFacade {
 
         registerCommand(room, request.commandId)
         bumpVersion(room)
+        roomRepository.save(room)
         return sanitizeRoom(room, request.sessionId)
     }
 
@@ -359,6 +379,14 @@ class InMemoryGameFacade : GameFacade {
     private fun shortId(): String = UUID.randomUUID().toString().replace("-", "").take(8)
 
     private fun roomCode(): String = UUID.randomUUID().toString().replace("-", "").take(4).uppercase()
+
+    private fun uniqueRoomCode(): String {
+        repeat(32) {
+            val code = roomCode()
+            if (!roomRepository.existsByCode(code)) return code
+        }
+        throw ResponseStatusException(HttpStatus.CONFLICT, "room code generation failed")
+    }
 
     private fun badRequest(message: String): Nothing = throw ResponseStatusException(HttpStatus.BAD_REQUEST, message)
 
@@ -436,7 +464,7 @@ class InMemoryGameFacade : GameFacade {
         )
     }
 
-    private fun setPresence(room: RoomState, sessionId: String, connected: Boolean) {
+    private fun setPresenceOnRead(room: RoomState, sessionId: String, connected: Boolean) {
         val player = playerBySessionId(room, sessionId)
         if (player != null) {
             player.connected = connected
@@ -561,7 +589,7 @@ class InMemoryGameFacade : GameFacade {
         startRoundCountdown(room)
     }
 
-    private fun tickRoom(room: RoomState) {
+    private fun tickRoom(room: RoomState): Boolean {
         var changed = false
         if (room.status == RoomStatus.ROUND_START && room.phaseEndsAt != null && now() >= room.phaseEndsAt!!) {
             beginDrawing(room)
@@ -592,10 +620,14 @@ class InMemoryGameFacade : GameFacade {
         if (changed) {
             bumpVersion(room)
         }
+        return changed
     }
 
-    private fun sanitizeRoom(room: RoomState, viewerSessionId: String?): RoomSnapshotDto {
-        tickRoom(room)
+    private fun sanitizeRoom(room: RoomState, viewerSessionId: String?, persist: Boolean = false): RoomSnapshotDto {
+        val changed = tickRoom(room)
+        if (changed || persist) {
+            roomRepository.save(room)
+        }
         val canSeeKeyword = room.status == RoomStatus.ROUND_END ||
             room.status == RoomStatus.GAME_FINISHED ||
             (viewerSessionId != null && room.drawerSessionId == viewerSessionId && (room.status == RoomStatus.ROUND_START || room.status == RoomStatus.DRAWING))

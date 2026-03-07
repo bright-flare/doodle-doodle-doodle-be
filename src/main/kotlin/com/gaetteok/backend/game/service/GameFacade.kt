@@ -16,6 +16,7 @@ interface GameFacade {
     fun createRoom(request: CreateRoomRequest): RoomSnapshotDto
     fun joinRoom(request: CreateRoomRequest): RoomSnapshotDto
     fun getRoom(code: String, sessionId: String?): RoomSnapshotDto?
+    fun setPresence(code: String, sessionId: String, connected: Boolean): RoomSnapshotDto
     fun startGame(code: String, request: RoomCommandRequest): RoomSnapshotDto
     fun sendChat(code: String, request: ChatRequest): RoomSnapshotDto
     fun sendStroke(code: String, request: StrokeRequest): RoomSnapshotDto

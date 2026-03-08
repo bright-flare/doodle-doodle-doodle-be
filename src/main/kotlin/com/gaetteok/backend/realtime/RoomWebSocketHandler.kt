@@ -3,6 +3,7 @@ package com.gaetteok.backend.realtime
 import com.fasterxml.jackson.core.type.TypeReference
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.gaetteok.backend.api.dto.ChatRequest
+import com.gaetteok.backend.api.dto.CustomKeywordRequest
 import com.gaetteok.backend.api.dto.JoinRequestCreateRequest
 import com.gaetteok.backend.api.dto.ReactionRequest
 import com.gaetteok.backend.api.dto.RoomCommandRequest
@@ -114,6 +115,36 @@ class RoomWebSocketHandler(
                     val normalizedSessionId = requireSessionId(sessionId)
                     val emoji = message.payload?.path("emoji")?.asText()?.trim().orEmpty()
                     gameFacade.sendReaction(normalizedCode, ReactionRequest(normalizedSessionId, emoji, message.commandId))
+                    message.commandId?.let { realtimeGateway.publishCommandOk(connectionId, it) }
+                    realtimeGateway.publishRoomSnapshot(normalizedCode)
+                }
+
+                "draw.clear" -> {
+                    val normalizedCode = requireRoomCode(roomCode)
+                    val normalizedSessionId = requireSessionId(sessionId)
+                    gameFacade.clearCanvas(
+                        normalizedCode,
+                        RoomCommandRequest(
+                            sessionId = normalizedSessionId,
+                            commandId = message.commandId,
+                        )
+                    )
+                    message.commandId?.let { realtimeGateway.publishCommandOk(connectionId, it) }
+                    realtimeGateway.publishRoomSnapshot(normalizedCode)
+                }
+
+                "custom-keyword.set" -> {
+                    val normalizedCode = requireRoomCode(roomCode)
+                    val normalizedSessionId = requireSessionId(sessionId)
+                    val keyword = message.payload?.path("keyword")?.asText()?.trim().orEmpty()
+                    gameFacade.setCustomKeyword(
+                        normalizedCode,
+                        CustomKeywordRequest(
+                            sessionId = normalizedSessionId,
+                            keyword = keyword,
+                            commandId = message.commandId,
+                        )
+                    )
                     message.commandId?.let { realtimeGateway.publishCommandOk(connectionId, it) }
                     realtimeGateway.publishRoomSnapshot(normalizedCode)
                 }

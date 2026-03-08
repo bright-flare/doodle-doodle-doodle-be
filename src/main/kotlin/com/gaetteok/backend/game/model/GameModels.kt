@@ -2,6 +2,7 @@ package com.gaetteok.backend.game.model
 
 enum class RoomStatus {
     LOBBY,
+    WORD_PICK,
     ROUND_START,
     DRAWING,
     ROUND_END,

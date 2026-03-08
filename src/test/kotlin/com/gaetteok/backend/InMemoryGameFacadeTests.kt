@@ -1,9 +1,13 @@
 package com.gaetteok.backend
 
+import com.gaetteok.backend.api.dto.ChatRequest
 import com.gaetteok.backend.api.dto.CreateRoomRequest
 import com.gaetteok.backend.api.dto.CreateSessionRequest
+import com.gaetteok.backend.api.dto.CustomKeywordRequest
 import com.gaetteok.backend.api.dto.JoinRequestCreateRequest
 import com.gaetteok.backend.api.dto.RoomCommandRequest
+import com.gaetteok.backend.api.dto.StrokeDto
+import com.gaetteok.backend.api.dto.StrokeRequest
 import com.gaetteok.backend.api.dto.VoteRequest
 import com.gaetteok.backend.game.service.InMemoryGameFacade
 import kotlin.test.Test
@@ -37,7 +41,7 @@ class InMemoryGameFacadeTests {
         facade.joinRoom(CreateRoomRequest(action = "join", sessionId = guest.id, code = room.code, asSpectator = false))
         val started = facade.startGame(room.code, RoomCommandRequest(sessionId = host.id))
 
-        assertTrue(started.status == "ROUND_START" || started.status == "DRAWING")
+        assertTrue(started.status == "WORD_PICK" || started.status == "ROUND_START" || started.status == "DRAWING")
         assertNotNull(started.drawerSessionId)
     }
 
@@ -79,5 +83,41 @@ class InMemoryGameFacadeTests {
         val voted = facade.voteJoinRequest(room.code, VoteRequest(sessionId = guest.id, requestId = requestId, approve = true))
 
         assertTrue(voted.pendingPlayers.any { it.sessionId == spectator.id })
+    }
+
+    @Test
+    fun `drawer receives more points than guesser and can clear canvas`() {
+        val facade = InMemoryGameFacade()
+        val host = facade.createSession(CreateSessionRequest("호스트"))
+        val guest = facade.createSession(CreateSessionRequest("게스트"))
+
+        val room = facade.createRoom(CreateRoomRequest(action = "create", sessionId = host.id))
+        facade.joinRoom(CreateRoomRequest(action = "join", sessionId = guest.id, code = room.code, asSpectator = false))
+
+        val started = facade.startGame(room.code, RoomCommandRequest(sessionId = host.id))
+        if (started.status == "WORD_PICK") {
+            facade.setCustomKeyword(room.code, CustomKeywordRequest(sessionId = host.id, keyword = "붕어빵"))
+        } else {
+            Thread.sleep(2300)
+        }
+
+        val drawingRoom = facade.getRoom(room.code, host.id)!!
+        facade.sendStroke(
+            room.code,
+            StrokeRequest(
+                sessionId = host.id,
+                stroke = StrokeDto(10.0, 10.0, 120.0, 120.0, "#111827", 8),
+            )
+        )
+        val cleared = facade.clearCanvas(room.code, RoomCommandRequest(sessionId = host.id))
+        assertTrue(cleared.strokes.isEmpty())
+
+        val answer = drawingRoom.keyword ?: facade.getRoom(room.code, host.id)?.keyword
+        requireNotNull(answer)
+        val finished = facade.sendChat(room.code, ChatRequest(sessionId = guest.id, text = answer))
+        val drawerDelta = finished.roundResult?.scoreDeltas?.firstOrNull { it.sessionId == host.id }?.delta ?: 0
+        val guesserDelta = finished.roundResult?.scoreDeltas?.firstOrNull { it.sessionId == guest.id }?.delta ?: 0
+
+        assertTrue(drawerDelta > guesserDelta)
     }
 }

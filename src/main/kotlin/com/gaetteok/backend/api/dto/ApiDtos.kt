@@ -53,6 +53,15 @@ data class ReactionRequest(
     val commandId: String? = null,
 )
 
+data class CustomKeywordRequest(
+    @field:NotBlank
+    val sessionId: String,
+    @field:NotBlank
+    @field:Size(min = 2, max = 10)
+    val keyword: String,
+    val commandId: String? = null,
+)
+
 data class VoteRequest(
     @field:NotBlank
     val sessionId: String,

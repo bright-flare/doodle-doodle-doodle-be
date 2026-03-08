@@ -20,3 +20,8 @@ gaetteok:
   realtime:
     allowed-origins: ${GAETTEOK_ALLOWED_ORIGINS:*}
     websocket-path: ${GAETTEOK_WEBSOCKET_PATH:/ws/rooms}
+  game:
+    custom-keyword-chance-percent: ${GAETTEOK_CUSTOM_KEYWORD_CHANCE_PERCENT:5}
+    custom-keyword-pick-ms: ${GAETTEOK_CUSTOM_KEYWORD_PICK_MS:15000}
+    keyword-source-url: ${GAETTEOK_KEYWORD_SOURCE_URL:https://cdn.jsdelivr.net/npm/pd-korean-noun-list-for-wordles/src/CommonNouns.js}
+    keyword-cache-ttl-ms: ${GAETTEOK_KEYWORD_CACHE_TTL_MS:21600000}

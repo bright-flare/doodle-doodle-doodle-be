@@ -2,6 +2,7 @@ package com.gaetteok.backend.api.controller
 
 import com.gaetteok.backend.api.dto.ChatRequest
 import com.gaetteok.backend.api.dto.CreateRoomRequest
+import com.gaetteok.backend.api.dto.CustomKeywordRequest
 import com.gaetteok.backend.api.dto.JoinRequestCreateRequest
 import com.gaetteok.backend.api.dto.ReactionRequest
 import com.gaetteok.backend.api.dto.RoomCommandRequest
@@ -71,6 +72,26 @@ class RoomController(
         @Valid @RequestBody request: ReactionRequest,
     ): ResponseEntity<RoomResponse> {
         val room = gameFacade.sendReaction(code, request)
+        realtimeGateway.publishRoomSnapshot(room.code)
+        return ResponseEntity.ok(RoomResponse(room))
+    }
+
+    @PostMapping("/{code}/clear")
+    fun clearCanvas(
+        @PathVariable code: String,
+        @Valid @RequestBody request: RoomCommandRequest,
+    ): ResponseEntity<RoomResponse> {
+        val room = gameFacade.clearCanvas(code, request)
+        realtimeGateway.publishRoomSnapshot(room.code)
+        return ResponseEntity.ok(RoomResponse(room))
+    }
+
+    @PostMapping("/{code}/custom-keyword")
+    fun setCustomKeyword(
+        @PathVariable code: String,
+        @Valid @RequestBody request: CustomKeywordRequest,
+    ): ResponseEntity<RoomResponse> {
+        val room = gameFacade.setCustomKeyword(code, request)
         realtimeGateway.publishRoomSnapshot(room.code)
         return ResponseEntity.ok(RoomResponse(room))
     }

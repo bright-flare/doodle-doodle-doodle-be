@@ -3,6 +3,7 @@ package com.gaetteok.backend.game.service
 import com.gaetteok.backend.api.dto.ChatRequest
 import com.gaetteok.backend.api.dto.CreateRoomRequest
 import com.gaetteok.backend.api.dto.CreateSessionRequest
+import com.gaetteok.backend.api.dto.CustomKeywordRequest
 import com.gaetteok.backend.api.dto.JoinRequestCreateRequest
 import com.gaetteok.backend.api.dto.ReactionRequest
 import com.gaetteok.backend.api.dto.RoomCommandRequest
@@ -21,6 +22,8 @@ interface GameFacade {
     fun startGame(code: String, request: RoomCommandRequest): RoomSnapshotDto
     fun sendChat(code: String, request: ChatRequest): RoomSnapshotDto
     fun sendReaction(code: String, request: ReactionRequest): RoomSnapshotDto
+    fun clearCanvas(code: String, request: RoomCommandRequest): RoomSnapshotDto
+    fun setCustomKeyword(code: String, request: CustomKeywordRequest): RoomSnapshotDto
     fun sendStroke(code: String, request: StrokeRequest): RoomSnapshotDto
     fun createJoinRequest(code: String, request: JoinRequestCreateRequest): RoomSnapshotDto
     fun voteJoinRequest(code: String, request: VoteRequest): RoomSnapshotDto

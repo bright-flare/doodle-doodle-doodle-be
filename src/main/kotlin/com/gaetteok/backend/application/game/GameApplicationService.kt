@@ -3,6 +3,7 @@ package com.gaetteok.backend.application.game
 import com.gaetteok.backend.api.dto.ChatRequest
 import com.gaetteok.backend.api.dto.CreateRoomRequest
 import com.gaetteok.backend.api.dto.CreateSessionRequest
+import com.gaetteok.backend.api.dto.CustomKeywordRequest
 import com.gaetteok.backend.api.dto.JoinRequestCreateRequest
 import com.gaetteok.backend.api.dto.JoinRequestDto
 import com.gaetteok.backend.api.dto.PendingPlayerDto
@@ -31,9 +32,11 @@ import com.gaetteok.backend.domain.game.model.RoundResult
 import com.gaetteok.backend.domain.game.model.ScoreDelta
 import com.gaetteok.backend.domain.game.model.Stroke
 import com.gaetteok.backend.domain.game.model.UserSession
+import com.gaetteok.backend.domain.game.port.KeywordCatalog
 import com.gaetteok.backend.domain.game.repository.GameRoomRepository
 import com.gaetteok.backend.domain.game.repository.GameSessionRepository
 import com.gaetteok.backend.game.service.GameFacade
+import org.springframework.beans.factory.annotation.Value
 import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
@@ -47,8 +50,12 @@ import kotlin.random.Random
 class GameApplicationService(
     private val sessionRepository: GameSessionRepository,
     private val roomRepository: GameRoomRepository,
+    private val keywordCatalog: KeywordCatalog,
+    @param:Value("\${gaetteok.game.custom-keyword-chance-percent:5}")
+    private val customKeywordChancePercent: Int,
+    @param:Value("\${gaetteok.game.custom-keyword-pick-ms:15000}")
+    private val customKeywordPickMs: Long,
 ) : GameFacade {
-    private val keywords = listOf("사자", "바나나", "우주선", "떡볶이", "기린", "컴퓨터", "해바라기", "피자", "고양이", "자전거")
     private val roomCodeAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789".toCharArray()
 
     companion object {
@@ -57,6 +64,8 @@ class GameApplicationService(
         private const val MAX_MESSAGES = 120
         private const val MAX_REACTIONS = 32
         private const val MAX_PROCESSED_COMMANDS = 300
+        private const val CORRECT_GUESS_SCORE = 10
+        private const val CORRECT_DRAWER_SCORE = 20
     }
 
     @Synchronized
@@ -255,12 +264,12 @@ class GameApplicationService(
                 val drawer = room.drawerSessionId?.let { playerBySessionId(room, it) }
                 val scoreDeltas = mutableListOf<ScoreDelta>()
                 if (guesser != null) {
-                    guesser.score += 10
-                    scoreDeltas.add(ScoreDelta(guesser.sessionId, 10))
+                    guesser.score += CORRECT_GUESS_SCORE
+                    scoreDeltas.add(ScoreDelta(guesser.sessionId, CORRECT_GUESS_SCORE))
                 }
                 if (drawer != null) {
-                    drawer.score += 20
-                    scoreDeltas.add(ScoreDelta(drawer.sessionId, 20))
+                    drawer.score += CORRECT_DRAWER_SCORE
+                    scoreDeltas.add(ScoreDelta(drawer.sessionId, CORRECT_DRAWER_SCORE))
                 }
                 finishTurn(
                     room,
@@ -302,6 +311,43 @@ class GameApplicationService(
             )
         )
 
+        registerCommand(room, request.commandId)
+        bumpVersion(room)
+        roomRepository.save(room)
+        return sanitizeRoom(room, request.sessionId)
+    }
+
+    @Synchronized
+    override fun clearCanvas(code: String, request: RoomCommandRequest): RoomSnapshotDto {
+        val room = roomRepository.findByCode(code.uppercase()) ?: badRequest("invalid room")
+        if (hasProcessedCommand(room, request.commandId)) return sanitizeRoom(room, request.sessionId)
+        tickRoom(room)
+        if (room.status != RoomStatus.DRAWING) return sanitizeRoom(room, request.sessionId)
+        if (room.drawerSessionId != request.sessionId) return sanitizeRoom(room, request.sessionId)
+
+        room.strokes.clear()
+        registerCommand(room, request.commandId)
+        bumpVersion(room)
+        roomRepository.save(room)
+        return sanitizeRoom(room, request.sessionId)
+    }
+
+    @Synchronized
+    override fun setCustomKeyword(code: String, request: CustomKeywordRequest): RoomSnapshotDto {
+        val room = roomRepository.findByCode(code.uppercase()) ?: badRequest("invalid room")
+        if (hasProcessedCommand(room, request.commandId)) return sanitizeRoom(room, request.sessionId)
+        tickRoom(room)
+        if (room.status != RoomStatus.WORD_PICK) badRequest("지금은 직접 정답을 정할 수 없어요")
+        if (room.drawerSessionId != request.sessionId) badRequest("이번 턴 출제자만 정답을 정할 수 있어요")
+
+        val keyword = normalizeCustomKeyword(request.keyword)
+        if (!isValidCustomKeyword(keyword)) {
+            badRequest("정답은 2~10자의 한글/영문/숫자로 입력해 주세요")
+        }
+
+        room.keyword = keyword
+        room.maskedKeyword = maskWord(keyword)
+        beginDrawing(room, "drawer")
         registerCommand(room, request.commandId)
         bumpVersion(room)
         roomRepository.save(room)
@@ -440,6 +486,19 @@ class GameApplicationService(
 
     private fun isReaction(text: String): Boolean = text in listOf("👏", "😂", "🔥", "😮")
 
+    private fun normalizeCustomKeyword(value: String): String {
+        return value.trim().replace(Regex("\\s+"), "")
+    }
+
+    private fun isValidCustomKeyword(value: String): Boolean {
+        return value.length in 2..10 && value.matches(Regex("[0-9A-Za-z가-힣]+"))
+    }
+
+    private fun shouldPromptDrawerForKeyword(): Boolean {
+        val normalizedChance = customKeywordChancePercent.coerceIn(0, 100)
+        return Random.nextInt(100) < normalizedChance
+    }
+
     private fun playerBySessionId(room: RoomState, sessionId: String): PlayerState? = room.players.firstOrNull { it.sessionId == sessionId }
 
     private fun nicknameFor(room: RoomState, sessionId: String, fallback: String = "플레이어"): String {
@@ -571,6 +630,7 @@ class GameApplicationService(
     }
 
     private fun nextKeyword(room: RoomState): String {
+        val keywords = keywordCatalog.keywords()
         if (room.keywordPool.isEmpty()) {
             room.keywordPool = keywords.shuffled().toMutableList()
         }
@@ -584,7 +644,7 @@ class GameApplicationService(
             }
         }
 
-        val keyword = room.keywordPool.firstOrNull() ?: keywords.random()
+        val keyword = room.keywordPool.firstOrNull() ?: keywords.randomOrNull() ?: "고양이"
         if (room.keywordPool.isNotEmpty()) {
             room.keywordPool.removeAt(0)
         }
@@ -596,25 +656,41 @@ class GameApplicationService(
         val drawer = room.players.getOrNull(room.turnIndex)
         room.drawerSessionId = drawer?.sessionId
         room.turnId = shortId()
-        room.keyword = nextKeyword(room)
-        room.maskedKeyword = room.keyword?.let { maskWord(it) } ?: ""
         room.hintRevealed = false
         room.strokes.clear()
         room.reactions.clear()
         room.roundResult = null
         room.turnStartedAt = null
         room.turnEndsAt = null
+
+        if (drawer != null && shouldPromptDrawerForKeyword()) {
+            room.keyword = null
+            room.maskedKeyword = ""
+            room.phaseEndsAt = now() + customKeywordPickMs
+            room.status = RoomStatus.WORD_PICK
+            systemMessage(room, "개떡 찬스! ${drawer.nickname} 님이 직접 정답을 정하는 중이에요.")
+            return
+        }
+
+        room.keyword = nextKeyword(room)
+        room.maskedKeyword = room.keyword?.let { maskWord(it) } ?: ""
         room.phaseEndsAt = now() + ROUND_START_DELAY_MS
         room.status = RoomStatus.ROUND_START
         systemMessage(room, "라운드 ${room.roundNo} · ${drawer?.nickname ?: "플레이어"} 님 차례 준비!")
     }
 
-    private fun beginDrawing(room: RoomState) {
+    private fun beginDrawing(room: RoomState, keywordSource: String = "random") {
         val startedAt = now()
         room.status = RoomStatus.DRAWING
         room.turnStartedAt = startedAt
         room.turnEndsAt = startedAt + room.config.roundTimeSec * 1000L
         room.phaseEndsAt = room.turnEndsAt
+        if (keywordSource == "drawer") {
+            systemMessage(room, "개떡 찬스! 직접 정한 정답으로 바로 시작해요.")
+        }
+        if (keywordSource == "fallback") {
+            systemMessage(room, "정답 입력 시간이 지나 자동 제시어로 시작해요.")
+        }
         systemMessage(room, "${room.players.getOrNull(room.turnIndex)?.nickname ?: "플레이어"} 님 그리기 시작!")
     }
 
@@ -660,6 +736,12 @@ class GameApplicationService(
 
     private fun tickRoom(room: RoomState): Boolean {
         var changed = false
+        if (room.status == RoomStatus.WORD_PICK && room.phaseEndsAt != null && now() >= room.phaseEndsAt!!) {
+            room.keyword = nextKeyword(room)
+            room.maskedKeyword = room.keyword?.let { maskWord(it) } ?: ""
+            beginDrawing(room, "fallback")
+            changed = true
+        }
         if (room.status == RoomStatus.ROUND_START && room.phaseEndsAt != null && now() >= room.phaseEndsAt!!) {
             beginDrawing(room)
             changed = true
